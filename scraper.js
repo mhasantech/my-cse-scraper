@@ -12,20 +12,6 @@ try {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
-    }const axios = require('axios');
-const cheerio = require('cheerio');
-const admin = require('firebase-admin');
-const https = require('https');
-
-try {
-    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-    const decodedKey = Buffer.from(base64Key, 'base64').toString('utf8');
-    const serviceAccount = JSON.parse(decodedKey);
-
-    if (!admin.apps.length) {
-        admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-        });
     }
     console.log("ফায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
 } catch (initError) {
@@ -49,7 +35,6 @@ async function scrapeSingleCompany(companyCode, todayDate) {
 
         const $ = cheerio.load(data);
         
-        // ডিফল্ট অবজেক্ট স্ট্রাকচার তৈরি
         let companyInfo = {
             code: companyCode,
             date: todayDate,
@@ -64,36 +49,28 @@ async function scrapeSingleCompany(companyCode, todayDate) {
             updated_at: admin.firestore.FieldValue.serverTimestamp()
         };
 
-        // পেজের সমস্ত টেবিল রো (tr) চেক করে ডেটা মেলানো হচ্ছে
         $('table tr').each((i, el) => {
             const cols = $(el).find('td');
             
             cols.each((index, td) => {
                 const text = $(td).text().trim().toLowerCase();
                 
-                // ১. LTP, High, Low বের করা (Current Market Information টেবিল থেকে)
                 if (text.includes('last trade price (ltp)')) {
                     companyInfo.ltp = $(td).next('td').text().trim();
                 } else if (text.includes("day's range")) {
-                    const range = $(td).next('td').text().trim(); // উদাহরণ: "17.50 - 17.90"
+                    const range = $(td).next('td').text().trim();
                     if (range && range.includes('-')) {
                         const parts = range.split('-');
                         companyInfo.low = parts[0].trim();
                         companyInfo.high = parts[1].trim();
                     }
                 }
-                
-                // ২. Market Category বের করা (Basic Information টেবিল থেকে)
                 else if (text.includes('market category')) {
                     companyInfo.category = $(td).next('td').text().trim();
                 }
-                
-                // ৩. Half Year বা ট্রায়াল EPS বের করা
                 else if (text.includes('hy eps') || (text === 'eps' && companyInfo.eps === "N/A")) {
                     companyInfo.eps = $(td).next('td').text().trim();
                 }
-                
-                // ৪. Dividend এবং Record Date বের করা (AGM Information টেবিল থেকে)
                 else if (text.includes('dividend(%)')) {
                     companyInfo.dividend = $(td).next('td').text().trim();
                 } else if (text.includes('record date')) {
@@ -102,16 +79,14 @@ async function scrapeSingleCompany(companyCode, todayDate) {
             });
         });
 
-        // ৫. ডাইনামিক P/E Ratio হিসাব করা: LTP / EPS (যদি দুটোই সংখ্যা হয়)
         const ltpNum = parseFloat(companyInfo.ltp);
         const epsNum = parseFloat(companyInfo.eps);
         if (!isNaN(ltpNum) && !isNaN(epsNum) && epsNum !== 0) {
             companyInfo.pe_ratio = (ltpNum / epsNum).toFixed(2);
         }
 
-        // ফায়ারবেইজে ফাইনাল ডেটা সেভ করা
         await db.collection('cse_detailed_data').doc(`${todayDate}_${companyCode}`).set(companyInfo, { merge: true });
-        console.log(`성공: ${companyCode} -> LTP: ${companyInfo.ltp}, Cat: ${companyInfo.category}, P/E: ${companyInfo.pe_ratio}`);
+        console.log(`성공: ${companyCode} -> LTP: ${companyInfo.ltp}, Cat: ${companyInfo.category}`);
 
     } catch (err) {
         console.error(`ভুল হয়েছে ${companyCode} স্ক্র্যাপ করতে:`, err.message);
@@ -119,7 +94,7 @@ async function scrapeSingleCompany(companyCode, todayDate) {
 }
 
 async function startScraper() {
-    console.log("প্রথম ধাপে কারেন্ট মার্কেট থেকে কোম্পানির তালিকা আনা হচ্ছে...");
+    console.log("প্রথম ধাপে কারেন্ট破解 মার্কেট থেকে কোম্পানির তালিকা আনা হচ্ছে...");
     const listUrl = "https://www.cse.com.bd/market/current_price"; 
     const todayDate = new Date().toISOString().split('T')[0];
 
@@ -145,7 +120,6 @@ async function startScraper() {
 
         console.log(`মোট ${companies.length}টি কোম্পানি পাওয়া গেছে। স্ক্র্যাপিং শুরু হচ্ছে...`);
 
-        // একসাথে ১০টি করে কোম্পানির ডেটা প্যারালালে এবং দ্রুত প্রসেস করা
         const chunkSize = 10; 
         for (let i = 0; i < companies.length; i += chunkSize) {
             const chunk = companies.slice(i, i + chunkSize);
