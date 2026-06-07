@@ -3,22 +3,22 @@ const cheerio = require('cheerio');
 const admin = require('firebase-admin');
 
 try {
-    // গিটহাব সিক্রেটস থেকে আসা JSON স্ট্রিং-এর ব্যাকс্ল্যাশ বাগ ফিক্স করার ট্রিক
-    let secretStr = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    // গিটহাব সিক্রেটস থেকে Base64 স্ট্রিংটি নেওয়া হচ্ছে
+    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
     
-    // ব্যাকস্ল্যাশ এবং নিউলাইনের সমস্যাগুলো ঠিক করা হচ্ছে
-    secretStr = secretStr.replace(/\\n/g, '\n'); 
-
-    const serviceAccount = JSON.parse(secretStr);
+    // Base64 টেক্সটকে আবার আসল JSON টেক্সটে রূপান্তর করা হচ্ছে
+    const decodedKey = Buffer.from(base64Key, 'base64').toString('utf8');
+    
+    const serviceAccount = JSON.parse(decodedKey);
 
     if (!admin.apps.length) {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
     }
-    console.log("फায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
+    console.log("ফায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
 } catch (initError) {
-    console.error("ফায়ারবেইজ ইনিশিয়ালাইজ করতে সমস্যা হয়েছে। আপনার GitHub Secret চেক করুন।", initError.message);
+    console.error("ফায়ারবেইজ ইনিশিয়ালাইজ করতে समस्या হয়েছে। আপনার GitHub Secret চেক করুন।", initError.message);
     process.exit(1);
 }
 
