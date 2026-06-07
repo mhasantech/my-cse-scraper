@@ -1,4 +1,4 @@
-name: Node.js CSE Scraper
+name: Market Scraper Automation
 
 on:
   schedule:
@@ -10,7 +10,6 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     env:
-      # গিটহাবের অ্যাকশনগুলোকে জোরপূর্বক Node 24-এ রান করানোর কমান্ড
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Code
@@ -19,12 +18,17 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24' # এখানে আমরা ২৪ করে দিলাম
+          node-version: '24'
 
       - name: Install Dependencies
         run: npm install
 
-      - name: Run Scraper
+      - name: Run CSE Scraper
         env:
           FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
         run: node scraper.js
+
+      - name: Run DSE Scraper  # এই নতুন স্টেপটি আমরা যোগ করলাম ডিএসই এর জন্য
+        env:
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+        run: node dse_scraper.js
