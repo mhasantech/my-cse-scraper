@@ -1,5 +1,7 @@
 const axios = require('axios');
+const cheerio = require('cheerio');
 const admin = require('firebase-admin');
+const https = require('https');
 
 try {
     const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
@@ -11,28 +13,80 @@ try {
             credential: admin.credential.cert(serviceAccount)
         });
     }
-    console.log("DSE API স্ক্রাপার: ফায়ারবেইজ সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
+    console.log("DSE স্ক্রাপার: ফায়ারবেইজ সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
 } catch (initError) {
-    console.error("DSE API স্ক্রাপার: ফায়ারবেইজ ইনিশিয়ালাইজেশন এরর:", initError.message);
+    console.error("DSE স্ক্রাপার: ফায়ারবেইজ ইনিশিয়ালাইজেশন এরর:", initError.message);
     process.exit(1);
 }
 
 const db = admin.firestore();
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// এক লাইনের টেক্সট (যেমন: "17.50% 2024, 14% 2022") ভেঙে বছরভিত্তিক আলাদা ফিল্ড করার ফাংশন
+// ১. DSEX এবং অন্যান্য ইনডেক্স ভ্যালু স্ক্র্যাপ করার নতুন ফাংশন
+async function scrapeDSEIndices(todayDate) {
+    console.log("DSE হোমপেজ থেকে DSEX (DECX) এবং অন্যান্য ইনডেক্স ভ্যালু স্ক্র্যাপ করা হচ্ছে...");
+    const homeUrl = "https://dsebd.org/index.php";
+    
+    try {
+        const { data } = await axios.get(homeUrl, {
+            httpsAgent: httpsAgent,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+            }
+        });
+
+        const $ = cheerio.load(data);
+        
+        // DSE হোমপেজের ইনডেক্স টেবিল ট্র্যাক করা হচ্ছে (আলাদা আলাদা বা ক্লাস সিলেক্টর দিয়ে)
+        $('.bg-blue-light, .table-responsive table, table').each((index, table) => {
+            let htmlText = $(table).text();
+            
+            // টেবিলে ইনডেক্সের নাম আছে কিনা যাচাই
+            if (htmlText.includes('DSEX') || htmlText.includes('D30')) {
+                $(table).find('tr').each((trIdx, tr) => {
+                    const cols = $(tr).find('td');
+                    if (cols.length >= 4) {
+                        const indexName = $(cols[0]).text().trim().replace(/[/\\.#$/[\]]/g, "-"); // DSEX, DSES, D30
+                        const value = $(cols[1]).text().trim(); // যেমন: 5430.25
+                        const change = $(cols[2]).text().trim(); // যেমন: -12.45
+                        const changePercent = $(cols[3]).text().trim(); // যেমন: -0.23%
+                        
+                        // শুধুমাত্র ভ্যালিড ইনডেক্স ফিল্টার করা হচ্ছে
+                        if (indexName && (indexName.includes('DSEX') || indexName.includes('DSES') || indexName.includes('D30') || indexName.includes('DECX'))) {
+                            const indexInfo = {
+                                index_name: indexName,
+                                date: todayDate,
+                                value: value,
+                                change: change,
+                                change_percent: changePercent,
+                                updated_at: admin.firestore.FieldValue.serverTimestamp()
+                            };
+                            
+                            // ফায়ারবেইজে আলাদা কালেকশনে ইন্ডেক্স ডেটা সেভ করা হচ্ছে
+                            db.collection('dse_index_data').doc(`${todayDate}_${indexName}`).set(indexInfo, { merge: true });
+                            console.log(`성공 (Index): ${indexName} -> Value: ${value}, Change: ${change} (${changePercent})`);
+                        }
+                    }
+                });
+            }
+        });
+    } catch (err) {
+        console.error("DSEX ইনডেক্স স্ক্র্যাপ করতে সমস্যা হয়েছে, তবে মূল প্রসেস সচল থাকবে। এরর:", err.message);
+    }
+}
+
+// ডিভিডেন্ড টেক্সট স্প্লিট করার হেল্পার ফাংশন
 function parseDividendHistory(text, type, infoObj) {
     if (!text || text === "N/A" || text === "-" || typeof text !== 'string') return;
     
     const parts = text.split(',');
     parts.forEach(part => {
         const trimmed = part.trim();
-        // চার ডিজিটের বছর বের করার লজিক (যেমন: 2024, 2023)
         const yearMatch = trimmed.match(/\b(19|20)\d{2}\b/);
         
         if (yearMatch) {
             const year = yearMatch[0];
-            // বছর বাদে বাকি অংশটুকু হলো পার্সেন্টেজ বা রেট (যেমন: 17.50%)
             const rate = trimmed.replace(year, '').trim();
             if (rate) {
                 infoObj[`${type}_${year}`] = rate;
@@ -41,13 +95,13 @@ function parseDividendHistory(text, type, infoObj) {
     });
 }
 
+// ২. আপনার এপিআই থেকে কোম্পানির ডিভিডেন্ড আনার ফাংশন
 async function fetchFromDSEApi(companyCode, todayDate) {
     const apiUrl = `https://dse-scrape.vercel.app/api/scrape?action=all&tradingCode=${companyCode}`;
     
     try {
         const response = await axios.get(apiUrl, { timeout: 15000 });
         
-        // আপনার এপিআই স্ট্রাকচার অনুযায়ী response.data.data.details রিড করা হচ্ছে
         if (response.data && response.data.success && response.data.data && response.data.data.details) {
             const details = response.data.data.details;
 
@@ -59,29 +113,30 @@ async function fetchFromDSEApi(companyCode, todayDate) {
                 updated_at: admin.firestore.FieldValue.serverTimestamp()
             };
 
-            // এপিআই-এর নির্দিষ্ট cashDividend এবং stockDividend ফিল্ড নেওয়া হচ্ছে
             const rawCash = details.cashDividend || "N/A";
             const rawStock = details.stockDividend || "N/A";
 
-            // টেক্সট ভেঙে বছরভিত্তিক আলাদা ফিল্ডে রূপান্তর করা হচ্ছে
             parseDividendHistory(rawCash, 'cash_dividend', dividendInfo);
             parseDividendHistory(rawStock, 'stock_dividend', dividendInfo);
 
-            // ফায়ারবেইজের 'dse_dividend_data' কালেকশনে ডকুমেন্ট মার্জ করা হচ্ছে
             await db.collection('dse_dividend_data').doc(`${todayDate}_${companyCode}`).set(dividendInfo, { merge: true });
-            console.log(`성공 (DSE API): ${companyCode} -> ক্যাশ ও স্টক ডিভিডেন্ড আলাদা করে সেভ করা হয়েছে।`);
+            console.log(`성공 (DSE API): ${companyCode} -> ক্যাশ ও স্টক ডিভিডেন্ড সেভ হয়েছে।`);
             
-        } else {
-            console.log(`তথ্য মেলেনি: ${companyCode} এর সঠিক ডিটেইলস অবজেক্ট আপনার এপিআই-তে পাওয়া যায়নি।`);
         }
     } catch (err) {
         console.error(`API ভুল: ${companyCode} এর ডেটা রিড করতে সমস্যা -`, err.message);
     }
 }
 
+// ৩. কোড এক্সিকিউশনের প্রধান ফাংশন
 async function startScraper() {
-    console.log("প্রথম ধাপে সিএসই কালেকশন থেকে আজকের কোম্পানির তালিকা নেওয়া হচ্ছে...");
     const todayDate = new Date().toISOString().split('T')[0];
+    
+    // কোম্পানি ডিভিডেন্ড রান করার আগেই প্রথমে DSEX ইনডেক্স ডেটা তুলে নিয়ে আসবে
+    await scrapeDSEIndices(todayDate);
+    await delay(2000); // ২ সেকেন্ডের সেফটি বিরতি
+
+    console.log("দ্বিতীয় ধাপে সিএসই কালেকশন থেকে আজকের কোম্পানির তালিকা নেওয়া হচ্ছে...");
     let companies = [];
 
     try {
@@ -94,7 +149,6 @@ async function startScraper() {
             }
         });
 
-        // ব্যাকআপ তালিকা (যদি সিএসই কালেকশন কোনো কারণে ফাঁকা থাকে)
         if (companies.length === 0) {
             console.log("আজকের সিএসই তালিকা পাওয়া যায়নি। ব্যাকআপ লিস্ট ব্যবহার করা হচ্ছে...");
             companies = ["UTTARABANK", "BDTHAI", "ACI", "BEXIMCO", "BATBC", "GP", "LHBL", "SQURPHARMA"];
@@ -102,17 +156,16 @@ async function startScraper() {
 
         console.log(`মোট ${companies.length}টি কোম্পানির ডিভিডেন্ড ডাটা আপনার API থেকে আনা শুরু হচ্ছে...`);
 
-        // একসাথে ৫টি করে কোম্পানির রিকোয়েস্ট পাঠানো হচ্ছে
         const chunkSize = 5; 
         for (let i = 0; i < companies.length; i += chunkSize) {
             const chunk = companies.slice(i, i + chunkSize);
             console.log(`[DSE API] [${i + 1}-${Math.min(i + chunkSize, companies.length)} / ${companies.length}] প্রসেস হচ্ছে...`);
             
             await Promise.all(chunk.map(code => fetchFromDSEApi(code, todayDate)));
-            await delay(1000); // ভার্সেল সার্ভার সুরক্ষার জন্য ১ সেকেন্ড বিরতি
+            await delay(1000); 
         }
 
-        console.log("অভিনন্দন! আপনার নিজস্ব এপিআই ব্যবহার করে ডিএসই-র সব ডিভিডেন্ড তথ্য নিখুঁতভাবে ফায়ারবেইজে সংরক্ষিত হয়েছে।");
+        console.log("অভিনন্দন! DSEX ভ্যালু এবং সমস্ত কোম্পানির ডিভিডেন্ড তথ্য সফলভাবে ফায়ারবেইজে সংরক্ষিত হয়েছে।");
 
     } catch (error) {
         console.error("প্রধান প্রসেস রান করতে সমস্যা হয়েছে:", error.message);
