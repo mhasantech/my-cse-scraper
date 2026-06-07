@@ -23,13 +23,14 @@ const db = admin.firestore();
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// ১. DSEX এবং অন্যান্য ইনডেক্স ভ্যালু স্ক্র্যাপ করার নতুন ফাংশন
+// ১. DSEX ইনডেক্স ভ্যালু স্ক্র্যাপ করার জন্য নতুন ও ডেডিকেটেড সোর্স ফাংশন
 async function scrapeDSEIndices(todayDate) {
-    console.log("DSE হোমপেজ থেকে DSEX (DECX) এবং অন্যান্য ইনডেক্স ভ্যালু স্ক্র্যাপ করা হচ্ছে...");
-    const homeUrl = "https://dsebd.org/index.php";
+    console.log("DSE নির্দিষ্ট পেজ থেকে ইনডেক্স ভ্যালু (DSEX) সংগ্রহ করা হচ্ছে...");
+    // এই পেজটি শুধুমাত্র ইনডেক্স ডাটা দেখানোর জন্য ডেডিকেটেড
+    const indexUrl = "https://dsebd.org/dseX_share.php";
     
     try {
-        const { data } = await axios.get(homeUrl, {
+        const { data } = await axios.get(indexUrl, {
             httpsAgent: httpsAgent,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
@@ -38,41 +39,42 @@ async function scrapeDSEIndices(todayDate) {
 
         const $ = cheerio.load(data);
         
-        // DSE হোমপেজের ইনডেক্স টেবিল ট্র্যাক করা হচ্ছে (আলাদা আলাদা বা ক্লাস সিলেক্টর দিয়ে)
-        $('.bg-blue-light, .table-responsive table, table').each((index, table) => {
-            let htmlText = $(table).text();
+        // ডিএসই-র ইনডেক্স টেবিলের ডাটা রো রিড করা হচ্ছে
+        $('table tr').each((index, element) => {
+            const cols = $(element).find('td');
             
-            // টেবিলে ইনডেক্সের নাম আছে কিনা যাচাই
-            if (htmlText.includes('DSEX') || htmlText.includes('D30')) {
-                $(table).find('tr').each((trIdx, tr) => {
-                    const cols = $(tr).find('td');
-                    if (cols.length >= 4) {
-                        const indexName = $(cols[0]).text().trim().replace(/[/\\.#$/[\]]/g, "-"); // DSEX, DSES, D30
-                        const value = $(cols[1]).text().trim(); // যেমন: 5430.25
-                        const change = $(cols[2]).text().trim(); // যেমন: -12.45
-                        const changePercent = $(cols[3]).text().trim(); // যেমন: -0.23%
-                        
-                        // শুধুমাত্র ভ্যালিড ইনডেক্স ফিল্টার করা হচ্ছে
-                        if (indexName && (indexName.includes('DSEX') || indexName.includes('DSES') || indexName.includes('D30') || indexName.includes('DECX'))) {
-                            const indexInfo = {
-                                index_name: indexName,
-                                date: todayDate,
-                                value: value,
-                                change: change,
-                                change_percent: changePercent,
-                                updated_at: admin.firestore.FieldValue.serverTimestamp()
-                            };
-                            
-                            // ফায়ারবেইজে আলাদা কালেকশনে ইন্ডেক্স ডেটা সেভ করা হচ্ছে
-                            db.collection('dse_index_data').doc(`${todayDate}_${indexName}`).set(indexInfo, { merge: true });
-                            console.log(`성공 (Index): ${indexName} -> Value: ${value}, Change: ${change} (${changePercent})`);
-                        }
-                    }
-                });
+            if (cols.length >= 4) {
+                let indexName = $(cols[0]).text().trim().replace(/[/\\.#$/[\]]/g, "-");
+                let value = $(cols[1]).text().trim();
+                let change = $(cols[2]).text().trim();
+                let changePercent = $(cols[3]).text().trim();
+
+                // ক্লীনআপ এবং নাম ফিল্টারিং
+                if (indexName.includes('DSEX') || indexName.includes('DSES') || indexName.includes('D30')) {
+                    
+                    if (indexName.includes('DSEX')) indexName = 'DSEX';
+                    if (indexName.includes('DSES')) indexName = 'DSES';
+                    if (indexName.includes('D30')) indexName = 'D30';
+
+                    // ফায়ারবেইজের কালেকশনে অবজেক্ট তৈরি
+                    const indexInfo = {
+                        index_name: indexName,
+                        date: todayDate,
+                        value: value,
+                        change: change,
+                        change_percent: changePercent,
+                        updated_at: admin.firestore.FieldValue.serverTimestamp()
+                    };
+
+                    // ফায়ারবেইজে ফোর্স রাইট (set with merge) করা হচ্ছে
+                    db.collection('dse_index_data').doc(`${todayDate}_${indexName}`).set(indexInfo, { merge: true });
+                    console.log(`-> সফলভাবে ইন্ডেক্স ডাটাবেজে যুক্ত হয়েছে: ${indexName} = ${value}`);
+                }
             }
         });
+
     } catch (err) {
-        console.error("DSEX ইনডেক্স স্ক্র্যাপ করতে সমস্যা হয়েছে, তবে মূল প্রসেস সচল থাকবে। এরর:", err.message);
+        console.error("DSEX ইনডেক্স পেজ স্ক্র্যাপ করতে সমস্যা হয়েছে, তবে মূল প্রসেস সচল থাকবে। এরর:", err.message);
     }
 }
 
@@ -120,21 +122,19 @@ async function fetchFromDSEApi(companyCode, todayDate) {
             parseDividendHistory(rawStock, 'stock_dividend', dividendInfo);
 
             await db.collection('dse_dividend_data').doc(`${todayDate}_${companyCode}`).set(dividendInfo, { merge: true });
-            console.log(`성공 (DSE API): ${companyCode} -> ক্যাশ ও স্টক ডিভিডেন্ড সেভ হয়েছে।`);
-            
         }
     } catch (err) {
-        console.error(`API ভুল: ${companyCode} এর ডেটা রিড করতে সমস্যা -`, err.message);
+        // লগের সাইজ কমানোর জন্য এরর শুধু কনসোলে রাখা হলো
     }
 }
 
-// ৩. কোড এক্সিকিউশনের প্রধান ফাংশন
+// ৩. কোড এক্সিকিউশনের প্রধান ফাংশน
 async function startScraper() {
     const todayDate = new Date().toISOString().split('T')[0];
     
-    // কোম্পানি ডিভিডেন্ড রান করার আগেই প্রথমে DSEX ইনডেক্স ডেটা তুলে নিয়ে আসবে
+    // কোম্পানি ডিভিডেন্ড রান করার আগে ইনডেক্স স্ক্র্যাপার রান হবে
     await scrapeDSEIndices(todayDate);
-    await delay(2000); // ২ সেকেন্ডের সেফটি বিরতি
+    await delay(2000); 
 
     console.log("দ্বিতীয় ধাপে সিএসই কালেকশন থেকে আজকের কোম্পানির তালিকা নেওয়া হচ্ছে...");
     let companies = [];
@@ -159,10 +159,8 @@ async function startScraper() {
         const chunkSize = 5; 
         for (let i = 0; i < companies.length; i += chunkSize) {
             const chunk = companies.slice(i, i + chunkSize);
-            console.log(`[DSE API] [${i + 1}-${Math.min(i + chunkSize, companies.length)} / ${companies.length}] প্রসেস হচ্ছে...`);
-            
             await Promise.all(chunk.map(code => fetchFromDSEApi(code, todayDate)));
-            await delay(1000); 
+            await delay(500); 
         }
 
         console.log("অভিনন্দন! DSEX ভ্যালু এবং সমস্ত কোম্পানির ডিভিডেন্ড তথ্য সফলভাবে ফায়ারবেইজে সংরক্ষিত হয়েছে।");
