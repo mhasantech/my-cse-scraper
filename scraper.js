@@ -1,9 +1,10 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const admin = require('firebase-admin');
-
-// গিটহাব সিক্রেটস থেকে ফায়ারবেইজ চাবি রিড করা হচ্ছে
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+// গিটহাব সিক্রেটস থেকে আসা JSON স্ট্রিং-এর ব্যাকস্ল্যাশ বাগ ফিক্স করার ট্রিক
+let secretStr = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+// যদি টেক্সটের ভেতর নিউলাইন ভেঙে গিয়ে থাকে, তবে তা ঠিক করা হচ্ছে
+secretStr = secretStr.replace(/\\n/g, '\n').replace(/\n/g, '\\n');
 
 if (!admin.apps.length) {
     admin.initializeApp({
