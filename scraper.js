@@ -1,6 +1,7 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const admin = require('firebase-admin');
+const https = require('https'); // এটি নতুন যুক্ত করা হয়েছে SSL এরর হ্যান্ডেল করার জন্য
 
 try {
     // গিটহাব সিক্রেটস থেকে Base64 স্ট্রিংটি নেওয়া হচ্ছে
@@ -18,7 +19,7 @@ try {
     }
     console.log("ফায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
 } catch (initError) {
-    console.error("ফায়ারবেইজ ইনিশিয়ালাইজ করতে समस्या হয়েছে। আপনার GitHub Secret চেক করুন।", initError.message);
+    console.error("ফায়ারবেইজ ইনিশিয়ালাইজ করতে সমস্যা হয়েছে। আপনার GitHub Secret চেক করুন।", initError.message);
     process.exit(1);
 }
 
@@ -29,7 +30,11 @@ async function scrapeCSE() {
     const url = "https://www.cse.com.bd/market/current_market";
 
     try {
+        // এই এজেন্টটি এক্সিওসকে বলবে সিএসই ওয়েবসাইটের ইনভ্যালিড/আনভেরিফাইড এসএসএল সার্টিফিকেট ইগনোর করতে
+        const httpsAgent = new https.Agent({ rejectUnauthorized: false });
+
         const { data } = await axios.get(url, {
+            httpsAgent: httpsAgent, // এজেন্টটি এখানে যুক্ত করা হলো
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36'
             }
