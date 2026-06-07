@@ -2,9 +2,9 @@ name: Node.js CSE Scraper
 
 on:
   schedule:
-    # বাংলাদেশ সময় দুপুর ৩:১৫ মিনিটে (রবি থেকে বৃহস্পতিবার) এটি চলবে
+    # বাংলাদেশ সময় দুপুর ৩:১৫ মিনিটে (রবি থেকে বৃহস্পতিবার) স্বয়ংক্রিয়ভাবে চলবে
     - cron: '15 9 * * 1-5'
-  workflow_dispatch: # ফোন থেকে যেকোনো সময় বোতাম টিপে রান করার জন্য
+  workflow_dispatch: # ফোন থেকে ম্যানুয়ালি রান করার অপশন
 
 jobs:
   scrape:
@@ -16,7 +16,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20' # এখানে আমরা ১৮ বদলে ২০ করে দিলাম
 
       - name: Install Dependencies
         run: npm install
