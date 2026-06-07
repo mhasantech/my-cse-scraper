@@ -1,15 +1,25 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
 const admin = require('firebase-admin');
-// গিটহাব সিক্রেটস থেকে আসা JSON স্ট্রিং-এর ব্যাকস্ল্যাশ বাগ ফিক্স করার ট্রিক
-let secretStr = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
-// যদি টেক্সটের ভেতর নিউলাইন ভেঙে গিয়ে থাকে, তবে তা ঠিক করা হচ্ছে
-secretStr = secretStr.replace(/\\n/g, '\n').replace(/\n/g, '\\n');
 
-if (!admin.apps.length) {
-    admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-    });
+try {
+    // গিটহাব সিক্রেটস থেকে আসা JSON স্ট্রিং-এর ব্যাকс্ল্যাশ বাগ ফিক্স করার ট্রিক
+    let secretStr = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    
+    // ব্যাকস্ল্যাশ এবং নিউলাইনের সমস্যাগুলো ঠিক করা হচ্ছে
+    secretStr = secretStr.replace(/\\n/g, '\n'); 
+
+    const serviceAccount = JSON.parse(secretStr);
+
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+    }
+    console.log("फায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
+} catch (initError) {
+    console.error("ফায়ারবেইজ ইনিশিয়ালাইজ করতে সমস্যা হয়েছে। আপনার GitHub Secret চেক করুন।", initError.message);
+    process.exit(1);
 }
 
 const db = admin.firestore();
@@ -31,13 +41,11 @@ async function scrapeCSE() {
         let batch = db.batch();
         let count = 0;
 
-        // সিএসই ওয়েবসাইটের টেবিল থেকে ডেটা নেওয়া
         $('table tr').each((index, element) => {
-            if (index === 0) return; // টেবিল হেডার বাদ
+            if (index === 0) return; // হেডার বাদ
 
             const cols = $(element).find('td');
             if (cols.length >= 4) {
-                // কোম্পানির নাম থেকে ফায়ারবেইজের নিষিদ্ধ ক্যারেক্টারগুলো পরিষ্কার করা হলো
                 const companyName = $(cols[1]).text().trim().replace(/[/\\.#$/[\]]/g, "-"); 
                 const lastPrice = $(cols[2]).text().trim();
                 const highPrice = $(cols[3]).text().trim();
