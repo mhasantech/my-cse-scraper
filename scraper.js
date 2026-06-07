@@ -12,6 +12,20 @@ try {
         admin.initializeApp({
             credential: admin.credential.cert(serviceAccount)
         });
+    }const axios = require('axios');
+const cheerio = require('cheerio');
+const admin = require('firebase-admin');
+const https = require('https');
+
+try {
+    const base64Key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    const decodedKey = Buffer.from(base64Key, 'base64').toString('utf8');
+    const serviceAccount = JSON.parse(decodedKey);
+
+    if (!admin.apps.length) {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
     }
     console.log("ফায়ারবেইজ অ্যাডমিন সফলভাবে ইনিশিয়ালাইজ হয়েছে।");
 } catch (initError) {
@@ -21,8 +35,6 @@ try {
 
 const db = admin.firestore();
 const httpsAgent = new https.Agent({ rejectUnauthorized: false });
-
-// বিরতি বা ডিলের জন্য একটি হেল্পার ফাংশন
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function scrapeSingleCompany(companyCode, todayDate) {
@@ -37,33 +49,69 @@ async function scrapeSingleCompany(companyCode, todayDate) {
 
         const $ = cheerio.load(data);
         
-        // এখানে পেজের ভেতর থেকে সুনির্দিষ্ট তথ্য খোঁজা হচ্ছে
-        // সিএসই-র কোম্পানি ডিটেইলস পেজের স্ট্রাকচার অনুযায়ী এই টেবিল ডেটা নেওয়া
+        // ডিফল্ট অবজেক্ট স্ট্রাকচার তৈরি
         let companyInfo = {
             code: companyCode,
             date: todayDate,
+            ltp: "N/A",
+            high: "N/A",
+            low: "N/A",
+            category: "N/A",
+            eps: "N/A",
+            pe_ratio: "N/A",
+            dividend: "N/A",
+            record_date: "N/A",
             updated_at: admin.firestore.FieldValue.serverTimestamp()
         };
 
-        // পেজের ভেতরের বিভিন্ন টেবিল থেকে তথ্য বের করার লজিক
-        $('table.table tr').each((i, el) => {
-            const label = $(el).find('td').eq(0).text().trim().toLowerCase();
-            const value = $(el).find('td').eq(1).text().trim();
-
-            if (label.includes('market category') || label.includes('category')) {
-                companyInfo.category = value;
-            } else if (label.includes('p/e') || label.includes('pe ratio')) {
-                companyInfo.pe_ratio = value;
-            } else if (label.includes('authorized capital')) {
-                companyInfo.authorized_capital = value;
-            } else if (label.includes('paid up capital')) {
-                companyInfo.paid_up_capital = value;
-            }
+        // পেজের সমস্ত টেবিল রো (tr) চেক করে ডেটা মেলানো হচ্ছে
+        $('table tr').each((i, el) => {
+            const cols = $(el).find('td');
+            
+            cols.each((index, td) => {
+                const text = $(td).text().trim().toLowerCase();
+                
+                // ১. LTP, High, Low বের করা (Current Market Information টেবিল থেকে)
+                if (text.includes('last trade price (ltp)')) {
+                    companyInfo.ltp = $(td).next('td').text().trim();
+                } else if (text.includes("day's range")) {
+                    const range = $(td).next('td').text().trim(); // উদাহরণ: "17.50 - 17.90"
+                    if (range && range.includes('-')) {
+                        const parts = range.split('-');
+                        companyInfo.low = parts[0].trim();
+                        companyInfo.high = parts[1].trim();
+                    }
+                }
+                
+                // ২. Market Category বের করা (Basic Information টেবিল থেকে)
+                else if (text.includes('market category')) {
+                    companyInfo.category = $(td).next('td').text().trim();
+                }
+                
+                // ৩. Half Year বা ট্রায়াল EPS বের করা
+                else if (text.includes('hy eps') || (text === 'eps' && companyInfo.eps === "N/A")) {
+                    companyInfo.eps = $(td).next('td').text().trim();
+                }
+                
+                // ৪. Dividend এবং Record Date বের করা (AGM Information টেবিল থেকে)
+                else if (text.includes('dividend(%)')) {
+                    companyInfo.dividend = $(td).next('td').text().trim();
+                } else if (text.includes('record date')) {
+                    companyInfo.record_date = $(td).next('td').text().trim();
+                }
+            });
         });
 
-        // ফায়ারবেইজের 'cse_detailed_data' নামক নতুন কালেকশনে সেভ হবে
+        // ৫. ডাইনামিক P/E Ratio হিসাব করা: LTP / EPS (যদি দুটোই সংখ্যা হয়)
+        const ltpNum = parseFloat(companyInfo.ltp);
+        const epsNum = parseFloat(companyInfo.eps);
+        if (!isNaN(ltpNum) && !isNaN(epsNum) && epsNum !== 0) {
+            companyInfo.pe_ratio = (ltpNum / epsNum).toFixed(2);
+        }
+
+        // ফায়ারবেইজে ফাইনাল ডেটা সেভ করা
         await db.collection('cse_detailed_data').doc(`${todayDate}_${companyCode}`).set(companyInfo, { merge: true });
-        console.log(`성공: ${companyCode} এর বিস্তারিত তথ্য সেভ হয়েছে।`);
+        console.log(`성공: ${companyCode} -> LTP: ${companyInfo.ltp}, Cat: ${companyInfo.category}, P/E: ${companyInfo.pe_ratio}`);
 
     } catch (err) {
         console.error(`ভুল হয়েছে ${companyCode} স্ক্র্যাপ করতে:`, err.message);
@@ -84,7 +132,6 @@ async function startScraper() {
         const $ = cheerio.load(data);
         let companies = [];
 
-        // টেবিল থেকে কোম্পানির কোডগুলো (যেমন: BDTHAI) খুঁজে বের করা
         $('table tr').each((index, element) => {
             if (index === 0) return;
             const cols = $(element).find('td');
@@ -96,19 +143,19 @@ async function startScraper() {
             }
         });
 
-        console.log(`মোট ${companies.length}টি কোম্পানি পাওয়া গেছে। এবার বিস্তারিত তথ্য স্ক্র্যাপ করা শুরু হচ্ছে...`);
+        console.log(`মোট ${companies.length}টি কোম্পানি পাওয়া গেছে। স্ক্র্যাপিং শুরু হচ্ছে...`);
 
-        // লুপ চালিয়ে প্রতিটি কোম্পানির লিংকে আলাদাভাবে ঢোকা
-        for (let i = 0; i < companies.length; i++) {
-            console.log(`[${i + 1}/${companies.length}] ${companies[i]} এর পেজে ঢোকা হচ্ছে...`);
+        // একসাথে ১০টি করে কোম্পানির ডেটা প্যারালালে এবং দ্রুত প্রসেস করা
+        const chunkSize = 10; 
+        for (let i = 0; i < companies.length; i += chunkSize) {
+            const chunk = companies.slice(i, i + chunkSize);
+            console.log(`[${i + 1}-${Math.min(i + chunkSize, companies.length)} / ${companies.length}] কোম্পানিগুলো প্রসেস হচ্ছে...`);
             
-            await scrapeSingleCompany(companies[i], todayDate);
-            
-            // সিএসই সার্ভার যেন ব্লক না করে, সেজন্য প্রতি পেজের মাঝে ২ সেকেন্ড (২০০০ মিলিসেকেন্ড) অপেক্ষা করা
-            await delay(2000); 
+            await Promise.all(chunk.map(code => scrapeSingleCompany(code, todayDate)));
+            await delay(500); 
         }
 
-        console.log("অভিনন্দন! সব কোম্পানির বিস্তারিত তথ্য স্ক্র্যাপ করা শেষ হয়েছে।");
+        console.log("অভিনন্দন! আপনার চাহিদামত সব তথ্য সফলভাবে ফায়ারবেইজে সেভ হয়েছে।");
 
     } catch (error) {
         console.error("প্রধান তালিকা স্ক্র্যাপ করতে সমস্যা হয়েছে:", error.message);
