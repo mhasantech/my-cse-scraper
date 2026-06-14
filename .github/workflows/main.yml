@@ -3,7 +3,7 @@ name: Market Scraper Automation
 on:
   schedule:
     # বাংলাদেশ সময় দুপুর ৩:১৫ মিনিটে (রবি থেকে বৃহস্পতিবার) স্বয়ংক্রিয়ভাবে চলবে
-    - cron: '15 9 * * 1-5'
+    - cron: '30 9 * * 1-5'
   workflow_dispatch: # ফোন থেকে ম্যানুয়ালি রান করার অপশন
 
 jobs:
